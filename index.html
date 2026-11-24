@@ -3,6 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
 <title>Image coding</title>
 <style>
   :root { --bg:#e8eaed; --ink:#1c1e21; --muted:#5f6368; --frame:#202124; --line:#bfc3c8; --pick:#1c1e21; --pickink:#fff; }
@@ -75,7 +76,7 @@ const CONFIG = {
   appsScriptUrl: "https://script.google.com/macros/s/AKfycbwK6nAL2SePv265bO_3NIFB9fMLGM-NkaMtwwwBqJZTQCbjG5keifGxRZ_nJo0NL8vJ/exec",
   repeats: 0,        // number of images shown a second time (intra-coder reliability), e.g. 30
   allowBack: false,  // true lets coders revisit and re-answer earlier images
-  ext: "png"
+  ext: "png"         // use "png" if you ran prepare_images.py with --png
 };
 // =========================================
 
@@ -133,10 +134,11 @@ async function start() {
   } catch { $("loginErr").textContent = "Could not load images. Check your connection and try again."; $("start").disabled = false; return; }
 
   done = store.get("done:" + coder) || {};
-  try { // merge anything already saved in the sheet (resume on another device)
+  try { // check the ID with the server and merge anything already saved (resume on another device)
     const remote = await (await fetch(CONFIG.appsScriptUrl + "?coder=" + encodeURIComponent(coder))).json();
+    if (!Array.isArray(remote)) { $("loginErr").textContent = "This coder ID is not recognised."; $("start").disabled = false; return; }
     remote.forEach(p => { if (!(p in done)) done[p] = "(saved)"; });
-  } catch {}
+  } catch { $("loginErr").textContent = "Could not verify your ID. Check your connection and try again."; $("start").disabled = false; return; }
   pos = seq.findIndex((_, i) => !(i in done));
   $("login").hidden = true;
   flush();
