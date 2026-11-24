@@ -20,7 +20,7 @@
   .top { display:flex; justify-content:space-between; align-items:center; color:var(--muted); font-size:.9rem; margin-bottom:8px; }
   .bar { height:4px; background:var(--line); border-radius:2px; overflow:hidden; margin-bottom:16px; }
   .bar i { display:block; height:100%; width:0; background:var(--ink); }
-  .frame { background:var(--frame); border-radius:8px; display:flex; justify-content:center; align-items:center; min-height:200px; }
+  .frame { background:var(--frame); border-radius:8px; width:fit-content; max-width:100%; margin:0 auto; }
   .frame img { display:block; max-width:100%; max-height:62vh; object-fit:contain; }
   h2 { font-size:1.15rem; margin:20px 0 12px; font-weight:600; }
   .opts { display:grid; grid-template-columns:repeat(3,1fr); gap:10px; }
@@ -50,6 +50,7 @@
     <div class="top"><span id="count"></span><span id="sync" class="note"></span></div>
     <div class="bar"><i id="fill"></i></div>
     <div class="frame"><img id="img" alt="Image to code"></div>
+    <p id="imgErr" class="note" hidden></p>
     <h2 id="q"></h2>
     <div class="opts" id="opts" role="group" aria-labelledby="q"></div>
     <div class="actions">
@@ -71,7 +72,7 @@
 const CONFIG = {
   question: "Is the image below left-wing, agnostic, or right-wing?",
   options: ["Left-wing", "Agnostic", "Right-wing"],
-  appsScriptUrl: "https://script.google.com/macros/s/AKfycbxrqeOVfJm4-Nm5JeHbnLFtPK-z8D5ib8X6Q_OB8QM9M4icZn7X9KYQuVdZEPD6X_G8/exec",
+  appsScriptUrl: "https://script.google.com/macros/s/AKfycbwK6nAL2SePv265bO_3NIFB9fMLGM-NkaMtwwwBqJZTQCbjG5keifGxRZ_nJo0NL8vJ/exec",
   repeats: 0,        // number of images shown a second time (intra-coder reliability), e.g. 30
   allowBack: false,  // true lets coders revisit and re-answer earlier images
   ext: "png"
@@ -103,15 +104,23 @@ const store = {
   set: (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} }
 };
 
+let flushing = false, again = false;
 async function flush() {
-  const q = store.get("pending:" + coder) || [];
-  const left = [];
-  for (const row of q) {
-    try { await fetch(CONFIG.appsScriptUrl, { method: "POST", mode: "no-cors", headers: { "Content-Type": "text/plain" }, body: JSON.stringify(row) }); }
-    catch { left.push(row); }
-  }
-  store.set("pending:" + coder, left);
-  $("sync").textContent = left.length ? "Offline: " + left.length + " answer(s) will be sent when you reconnect" : "";
+  if (flushing) { again = true; return; }   // one sender at a time, so nothing is sent twice
+  flushing = true;
+  try {
+    do {
+      again = false;
+      for (const row of (store.get("pending:" + coder) || [])) {
+        try { await fetch(CONFIG.appsScriptUrl, { method: "POST", mode: "no-cors", headers: { "Content-Type": "text/plain" }, body: JSON.stringify(row) }); }
+        catch { break; }
+        // remove only the row just sent, re-reading the queue in case new answers were added meanwhile
+        store.set("pending:" + coder, (store.get("pending:" + coder) || []).filter(r => r.uid !== row.uid));
+      }
+    } while (again);
+  } finally { flushing = false; }
+  const left = (store.get("pending:" + coder) || []).length;
+  $("sync").textContent = left ? "Offline: " + left + " answer(s) will be sent when you reconnect" : "";
 }
 
 async function start() {
@@ -150,7 +159,9 @@ function show(i) {
   $("back").hidden = !(CONFIG.allowBack && i > 0);
   $("count").textContent = "Image " + (i + 1) + " of " + seq.length;
   $("fill").style.width = (i / seq.length * 100) + "%";
-  const img = $("img"); img.onload = () => { shownAt = Date.now(); };
+  const img = $("img"); $("imgErr").hidden = true;
+  img.onload = () => { shownAt = Date.now(); };
+  img.onerror = () => { $("imgErr").hidden = false; $("imgErr").textContent = "Image failed to load: " + img.getAttribute("src"); };
   img.src = "images/" + seq[i].id + "." + CONFIG.ext;
   if (seq[i + 1]) new Image().src = "images/" + seq[i + 1].id + "." + CONFIG.ext;
   window.scrollTo(0, 0);
@@ -164,7 +175,7 @@ function pick(label) {
 
 function submit() {
   if (!choice) return;
-  const row = { coder, position: pos, image: seq[pos].id, repeat: seq[pos].rep, response: choice, seconds: Math.round((Date.now() - (shownAt || Date.now())) / 100) / 10 };
+  const row = { uid: coder + ":" + pos + ":" + Date.now(), coder, position: pos, image: seq[pos].id, repeat: seq[pos].rep, response: choice, seconds: Math.round((Date.now() - (shownAt || Date.now())) / 100) / 10 };
   done[pos] = choice; store.set("done:" + coder, done);
   store.set("pending:" + coder, (store.get("pending:" + coder) || []).concat(row));
   flush();
